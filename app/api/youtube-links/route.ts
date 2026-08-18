@@ -3,61 +3,46 @@ import { NextRequest, NextResponse } from "next/server";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const input = body?.url || body?.channel || body?.input || "";
-    const type = body?.type === "shorts" ? "shorts" : "videos";
+    const input = body?.url || body?.channel || body?.video || body?.input || "";
 
     if (!input || typeof input !== "string") {
-      return NextResponse.json({ error: "Missing channel URL or handle" }, { status: 400 });
+      return NextResponse.json({ error: "Missing channel or video URL" }, { status: 400 });
     }
 
-    const links = await fetchAllYoutubeLinks(input, type);
-    return NextResponse.json(links);
+    const data = await processYoutubeInput(input);
+    return NextResponse.json(data);
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to fetch channel links" }, { status: 500 });
+    return NextResponse.json({ error: err.message || "Failed to process YouTube request" }, { status: 500 });
   }
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const input = searchParams.get("channel") || searchParams.get("url") || searchParams.get("input") || "";
-  const typeParam = searchParams.get("type") || searchParams.get("mode") || "videos";
-  const type = typeParam === "shorts" ? "shorts" : "videos";
+  const input = searchParams.get("url") || searchParams.get("channel") || searchParams.get("video") || searchParams.get("input") || "";
 
   if (!input) {
-    return NextResponse.json({ error: "Missing channel URL or handle parameter" }, { status: 400 });
+    return NextResponse.json({ error: "Missing url, channel, or video parameter" }, { status: 400 });
   }
 
   try {
-    const links = await fetchAllYoutubeLinks(input, type);
-    return NextResponse.json(links);
+    const data = await processYoutubeInput(input);
+    return NextResponse.json(data);
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to fetch channel links" }, { status: 500 });
+    return NextResponse.json({ error: err.message || "Failed to process YouTube request" }, { status: 500 });
   }
 }
 
-async function fetchAllYoutubeLinks(input: string, mode: "videos" | "shorts" = "videos"): Promise<string[]> {
+interface YoutubeResult {
+  channel: string;
+  channelUrl: string;
+  videos: string[];
+  shorts: string[];
+}
+
+async function processYoutubeInput(input: string): Promise<YoutubeResult> {
   const cleanInput = input.trim();
-  if (!cleanInput) return [];
-
-  const targetSuffix = mode === "shorts" ? "/shorts" : "/videos";
-  let channelUrl = "";
-
-  if (cleanInput.startsWith("http://") || cleanInput.startsWith("https://")) {
-    let baseUrl = cleanInput;
-    if (baseUrl.includes("/shorts")) {
-      baseUrl = baseUrl.replace(/\/shorts\/?.*$/, "");
-    } else if (baseUrl.includes("/videos")) {
-      baseUrl = baseUrl.replace(/\/videos\/?.*$/, "");
-    } else {
-      baseUrl = baseUrl.replace(/\/$/, "");
-    }
-    channelUrl = `${baseUrl}${targetSuffix}`;
-  } else if (cleanInput.startsWith("@")) {
-    channelUrl = `https://www.youtube.com/${cleanInput}${targetSuffix}`;
-  } else if (cleanInput.startsWith("UC") && cleanInput.length === 24) {
-    channelUrl = `https://www.youtube.com/channel/${cleanInput}${targetSuffix}`;
-  } else {
-    channelUrl = `https://www.youtube.com/@${cleanInput.replace(/^@/, "")}${targetSuffix}`;
+  if (!cleanInput) {
+    throw new Error("Input string is empty");
   }
 
   const headers = {
@@ -66,33 +51,104 @@ async function fetchAllYoutubeLinks(input: string, mode: "videos" | "shorts" = "
     "Accept-Language": "en-US,en;q=0.9",
   };
 
+  let handleOrChannelId = "";
+  let extractedFromVideo = false;
+
+  // 1. Check if input is a Video URL (watch?v=, shorts/, or youtu.be/)
+  const videoMatch =
+    cleanInput.match(/(?:watch\?v=|shorts\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/) ||
+    cleanInput.match(/^([a-zA-Z0-9_-]{11})$/);
+
+  if (videoMatch && (cleanInput.includes("youtube.com") || cleanInput.includes("youtu.be") || cleanInput.startsWith("http"))) {
+    const videoId = videoMatch[1];
+    extractedFromVideo = true;
+    const videoPageUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const videoRes = await fetch(videoPageUrl, { headers, cache: "no-store" });
+
+    if (!videoRes.ok) {
+      throw new Error(`Could not fetch video details from URL (HTTP ${videoRes.status})`);
+    }
+
+    const videoHtml = await videoRes.text();
+    const handleMatch =
+      videoHtml.match(/"canonicalBaseUrl":"(\/@[^"]+)"/) ||
+      videoHtml.match(/"ownerUrl":"(https:\/\/www\.youtube\.com\/@[^"]+)"/);
+
+    const channelIdMatch =
+      videoHtml.match(/"channelId":"(UC[a-zA-Z0-9_-]{22})"/) ||
+      videoHtml.match(/"externalChannelId":"(UC[a-zA-Z0-9_-]{22})"/);
+
+    if (handleMatch && handleMatch[1]) {
+      handleOrChannelId = handleMatch[1].replace(/^\//, "");
+    } else if (channelIdMatch && channelIdMatch[1]) {
+      handleOrChannelId = `channel/${channelIdMatch[1]}`;
+    } else {
+      throw new Error("Could not detect channel owner from video link");
+    }
+  } else {
+    // Input is Channel handle or channel URL
+    if (cleanInput.startsWith("http://") || cleanInput.startsWith("https://")) {
+      let baseUrl = cleanInput.replace(/\/videos\/?.*$/, "").replace(/\/shorts\/?.*$/, "").replace(/\/$/, "");
+      const matchHandle = baseUrl.match(/youtube\.com\/(@[^\/]+)/);
+      const matchChannel = baseUrl.match(/youtube\.com\/(channel\/UC[a-zA-Z0-9_-]{22})/);
+
+      if (matchHandle) {
+        handleOrChannelId = matchHandle[1];
+      } else if (matchChannel) {
+        handleOrChannelId = matchChannel[1];
+      } else {
+        handleOrChannelId = baseUrl.split("/").pop() || "";
+        if (!handleOrChannelId.startsWith("@") && !handleOrChannelId.startsWith("channel/")) {
+          handleOrChannelId = `@${handleOrChannelId}`;
+        }
+      }
+    } else if (cleanInput.startsWith("@")) {
+      handleOrChannelId = cleanInput;
+    } else if (cleanInput.startsWith("UC") && cleanInput.length === 24) {
+      handleOrChannelId = `channel/${cleanInput}`;
+    } else {
+      handleOrChannelId = `@${cleanInput.replace(/^@/, "")}`;
+    }
+  }
+
+  const baseChannelUrl = `https://www.youtube.com/${handleOrChannelId.replace(/^\//, "")}`;
+
+  // Fetch Videos & Shorts in parallel
+  const [videos, shorts] = await Promise.all([
+    fetchTabLinks(baseChannelUrl, "videos", headers),
+    fetchTabLinks(baseChannelUrl, "shorts", headers),
+  ]);
+
+  return {
+    channel: handleOrChannelId.startsWith("@") ? handleOrChannelId : `@${handleOrChannelId}`,
+    channelUrl: baseChannelUrl,
+    videos,
+    shorts,
+  };
+}
+
+async function fetchTabLinks(baseChannelUrl: string, mode: "videos" | "shorts", headers: Record<string, string>): Promise<string[]> {
+  const targetUrl = `${baseChannelUrl}/${mode}`;
   const videoIds = new Set<string>();
 
-  // 1. Fetch initial channel page HTML
-  let res = await fetch(channelUrl, { headers, cache: "no-store" });
+  let res = await fetch(targetUrl, { headers, cache: "no-store" });
   if (!res.ok) {
-    const altUrl = channelUrl.replace(new RegExp(`${targetSuffix}$`), "");
+    const altUrl = baseChannelUrl;
     res = await fetch(altUrl, { headers, cache: "no-store" });
-    if (!res.ok) {
-      throw new Error(`Could not fetch channel page (HTTP ${res.status})`);
-    }
+    if (!res.ok) return [];
   }
 
   const html = await res.text();
   extractVideoIdsFromText(html, videoIds);
 
-  // Extract INNERTUBE_API_KEY
   const apiKeyMatch =
     html.match(/"INNERTUBE_API_KEY":"(AIzaSy[a-zA-Z0-9_-]{33})"/) ||
     html.match(/"apiKey":"(AIzaSy[a-zA-Z0-9_-]{33})"/);
   const apiKey = apiKeyMatch ? apiKeyMatch[1] : "";
 
-  // Extract initial continuation token
   let continuation = extractContinuationToken(html);
-
-  // 2. Loop InnerTube continuation requests to fetch ALL items
   let page = 0;
-  const maxPages = 300;
+  const maxPages = 200;
 
   while (continuation && page < maxPages) {
     page++;
@@ -126,16 +182,10 @@ async function fetchAllYoutubeLinks(input: string, mode: "videos" | "shorts" = "
       const countBefore = videoIds.size;
       extractVideoIdsFromText(browseStr, videoIds);
 
-      // Extract next continuation token
       const nextToken = extractContinuationToken(browseStr);
+      if (!nextToken || nextToken === continuation) break;
 
-      if (!nextToken || nextToken === continuation) {
-        break;
-      }
-
-      if (videoIds.size === countBefore && page > 3) {
-        break;
-      }
+      if (videoIds.size === countBefore && page > 3) break;
 
       continuation = nextToken;
     } catch {
@@ -148,13 +198,11 @@ async function fetchAllYoutubeLinks(input: string, mode: "videos" | "shorts" = "
 }
 
 function extractVideoIdsFromText(text: string, videoIds: Set<string>) {
-  // Match "videoId":"..."
   const jsonMatches = text.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g);
   for (const match of jsonMatches) {
     if (match[1]) videoIds.add(match[1]);
   }
 
-  // Match /watch?v=... or /shorts/...
   const watchMatches = text.matchAll(/\/(?:watch\?v=|shorts\/)([a-zA-Z0-9_-]{11})/g);
   for (const match of watchMatches) {
     if (match[1]) videoIds.add(match[1]);
