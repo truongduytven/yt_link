@@ -1,14 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
+
+type ContentType = "videos" | "shorts";
 
 export default function Home() {
+  const [contentType, setContentType] = useState<ContentType>("videos");
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [links, setLinks] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedType, setCopiedType] = useState<"json" | "raw" | null>(null);
   const [activeTab, setActiveTab] = useState<"json" | "list">("json");
+
+  // Check if input URL suffix conflicts with current selected tab
+  const urlWarning = useMemo(() => {
+    const clean = url.trim();
+    if (!clean) return null;
+
+    if (contentType === "videos" && clean.includes("/shorts")) {
+      return {
+        type: "mismatch",
+        message: "Cảnh báo: Link của bạn chứa đuôi `/shorts` nhưng bạn đang chọn tab 'Videos Thường'. Hệ thống sẽ tự động bóc tách từ mục `/shorts` cho bạn.",
+        suggestType: "shorts" as ContentType,
+      };
+    }
+
+    if (contentType === "shorts" && clean.includes("/videos")) {
+      return {
+        type: "mismatch",
+        message: "Cảnh báo: Link của bạn chứa đuôi `/videos` nhưng bạn đang chọn tab 'YouTube Shorts'. Hệ thống sẽ tự động bóc tách từ mục `/videos` cho bạn.",
+        suggestType: "videos" as ContentType,
+      };
+    }
+
+    return null;
+  }, [url, contentType]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,7 +49,7 @@ export default function Home() {
       const res = await fetch("/api/youtube-links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), type: contentType }),
       });
 
       const data = await res.json();
@@ -59,7 +86,7 @@ export default function Home() {
       <div className="absolute bottom-[-10%] right-[-10%] w-[400px] h-[400px] bg-blue-600/15 blur-[100px] rounded-full pointer-events-none" />
 
       {/* Main Container */}
-      <div className="relative z-10 w-full max-w-4xl flex flex-col items-center gap-8 my-auto py-8">
+      <div className="relative z-10 w-full max-w-4xl flex flex-col items-center gap-6 my-auto py-8">
         {/* Header */}
         <div className="text-center space-y-3">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-semibold tracking-wide uppercase">
@@ -69,11 +96,59 @@ export default function Home() {
             YouTube Channel Link Extractor
           </div>
           <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-            Get Channel Video Links
+            Bóc Tách Link Video YouTube
           </h1>
           <p className="text-sm sm:text-base text-slate-400 max-w-xl mx-auto">
-            Nhập URL kênh, @handle hoặc Channel ID để lấy danh sách mảng JSON chứa các link video YouTube trong kênh đó.
+            Chọn loại nội dung bạn muốn bóc tách và nhập URL kênh hoặc @handle bên dưới.
           </p>
+        </div>
+
+        {/* Content Type Selector Tabs */}
+        <div className="w-full max-w-2xl bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center shadow-xl">
+          <button
+            type="button"
+            onClick={() => setContentType("videos")}
+            className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer ${
+              contentType === "videos"
+                ? "bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg shadow-red-600/30"
+                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            Videos Thường <code className="text-[11px] font-mono opacity-80">(/videos)</code>
+          </button>
+          <button
+            type="button"
+            onClick={() => setContentType("shorts")}
+            className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer ${
+              contentType === "shorts"
+                ? "bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg shadow-red-600/30"
+                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            YouTube Shorts <code className="text-[11px] font-mono opacity-80">(/shorts)</code>
+          </button>
+        </div>
+
+        {/* Tab Explanation Banner */}
+        <div className="w-full max-w-2xl bg-slate-900/60 border border-slate-800/80 rounded-xl p-3.5 text-xs text-slate-300 flex items-start gap-3">
+          <span className="text-base shrink-0 mt-0.5">ℹ️</span>
+          <div>
+            {contentType === "videos" ? (
+              <p>
+                <strong className="text-white">Tab Videos Thường (`/videos`):</strong> YouTube phân loại riêng các video dài truyền thống ở đường dẫn đuôi <code className="text-rose-400 font-mono">/videos</code> của kênh.
+              </p>
+            ) : (
+              <p>
+                <strong className="text-white">Tab YouTube Shorts (`/shorts`):</strong> Các video ngắn dạng dọc (Shorts) được YouTube tách riêng ra ở đường dẫn đuôi <code className="text-rose-400 font-mono">/shorts</code> của kênh.
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Input Form */}
@@ -90,7 +165,11 @@ export default function Home() {
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="Nhập kênh (vd: @Fireship hoặc https://www.youtube.com/@Fireship)"
+                placeholder={
+                  contentType === "videos"
+                    ? "Nhập kênh (vd: @Fireship hoặc https://www.youtube.com/@Fireship/videos)"
+                    : "Nhập kênh (vd: @Fireship hoặc https://www.youtube.com/@Fireship/shorts)"
+                }
                 className="w-full bg-transparent px-3 py-3 text-slate-100 placeholder-slate-500 focus:outline-none text-sm sm:text-base"
                 required
               />
@@ -109,7 +188,7 @@ export default function Home() {
                   </>
                 ) : (
                   <>
-                    Lấy danh sách link
+                    Lấy {contentType === "shorts" ? "Shorts" : "Videos"}
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
                     </svg>
@@ -119,6 +198,23 @@ export default function Home() {
             </div>
           </div>
         </form>
+
+        {/* Input URL Conflict Warning */}
+        {urlWarning && (
+          <div className="w-full max-w-2xl p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <span className="text-base shrink-0">⚠️</span>
+              <p>{urlWarning.message}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setContentType(urlWarning.suggestType)}
+              className="shrink-0 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg text-xs font-medium transition cursor-pointer"
+            >
+              Chuyển sang tab {urlWarning.suggestType === "shorts" ? "Shorts" : "Videos Thường"}
+            </button>
+          </div>
+        )}
 
         {/* Error Alert */}
         {error && (
@@ -140,7 +236,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
               <div className="flex items-center gap-3">
                 <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold rounded-full">
-                  {links.length} Video Found
+                  {links.length} {contentType === "shorts" ? "Shorts" : "Videos"} Found
                 </span>
                 <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
                   <button
@@ -233,13 +329,13 @@ export default function Home() {
         )}
 
         {/* API Endpoint Documentation Box */}
-        <div className="w-full max-w-2xl mt-4 p-4 bg-slate-900/40 border border-slate-800/60 rounded-xl text-slate-400 text-xs space-y-2">
+        <div className="w-full max-w-2xl mt-2 p-4 bg-slate-900/40 border border-slate-800/60 rounded-xl text-slate-400 text-xs space-y-2">
           <div className="font-semibold text-slate-300 flex items-center justify-between">
             <span>⚡ API Endpoint Access</span>
             <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">POST /api/youtube-links</span>
           </div>
           <p className="text-slate-400 leading-relaxed">
-            Bạn cũng có thể gọi trực tiếp API dạng POST (body JSON: <code className="text-rose-300 font-mono">{`{"url": "@handle"}`}</code>) hoặc GET (<code className="text-rose-300 font-mono">/api/youtube-links?channel=@handle</code>). Kết quả trả về duy nhất 1 mảng JSON links.
+            Bạn có thể truyền tham số <code className="text-rose-300 font-mono">type: "videos"</code> hoặc <code className="text-rose-300 font-mono">type: "shorts"</code> qua POST Body (<code className="text-rose-300 font-mono">{`{"url": "@handle", "type": "shorts"}`}</code>) hoặc GET Query (<code className="text-rose-300 font-mono">/api/youtube-links?channel=@handle&type=shorts</code>).
           </p>
         </div>
       </div>
