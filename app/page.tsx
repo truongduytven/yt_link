@@ -2,9 +2,10 @@
 
 import { useState, useMemo } from "react";
 
-type InputMode = "video" | "channel";
+type PlatformTab = "youtube_video" | "youtube_channel" | "tiktok";
 
-interface ApiResponse {
+interface SocialResult {
+  platform: "youtube" | "tiktok" | "facebook" | "instagram";
   channel: string;
   channelUrl: string;
   videos: string[];
@@ -12,38 +13,60 @@ interface ApiResponse {
 }
 
 export default function Home() {
-  const [mode, setMode] = useState<InputMode>("video");
+  const [activePlatform, setActivePlatform] = useState<PlatformTab>("youtube_video");
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<ApiResponse | null>(null);
+  const [data, setData] = useState<SocialResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedType, setCopiedType] = useState<"videos-json" | "shorts-json" | "all-json" | "videos-raw" | "shorts-raw" | null>(null);
   const [resultTab, setResultTab] = useState<"videos" | "shorts" | "combined">("videos");
 
-  // Detect input URL mismatch with active mode
-  const modeWarning = useMemo(() => {
+  // Platform Tab Configurations
+  const platformConfigs = {
+    youtube_video: {
+      label: "YouTube Video Link",
+      icon: "🔴",
+      placeholder: "Dán link video YouTube bất kỳ (vd: https://www.youtube.com/watch?v=... hoặc https://youtu.be/...)",
+      desc: "Nhập 1 link video YouTube duy nhất. Hệ thống tự dò Kênh sở hữu và xuất ra cả 2 mảng Videos Thường & Shorts.",
+      apiKey: "youtube",
+    },
+    youtube_channel: {
+      label: "YouTube Kênh Channel",
+      icon: "▶️",
+      placeholder: "Nhập Kênh YouTube (vd: @Fireship hoặc https://www.youtube.com/@Fireship)",
+      desc: "Nhập handle hoặc URL kênh YouTube. Hệ thống xuất ra đồng thời 2 mảng Videos Thường & Shorts.",
+      apiKey: "youtube",
+    },
+    tiktok: {
+      label: "TikTok",
+      icon: "🎵",
+      placeholder: "Dán link Video TikTok hoặc ID/Profile (vd: https://www.tiktok.com/@username/video/... hoặc @username)",
+      desc: "Bóc tách danh sách video/shorts từ link Video TikTok hoặc trang cá nhân TikTok.",
+      apiKey: "tiktok",
+    },
+  };
+
+  // Cross-Platform Link Mismatch Warning
+  const platformWarning = useMemo(() => {
     const clean = url.trim();
     if (!clean) return null;
 
-    const isVideoLink = clean.includes("watch?v=") || clean.includes("shorts/") || clean.includes("youtu.be/");
-    const isChannelLink = clean.startsWith("@") || clean.includes("/@") || clean.includes("/channel/");
-
-    if (mode === "video" && isChannelLink && !isVideoLink) {
+    if (!activePlatform.startsWith("youtube") && (clean.includes("youtube.com") || clean.includes("youtu.be"))) {
       return {
-        message: "Phát hiện đây là link Kênh Channel. Bạn có muốn chuyển sang chế độ 'Theo Kênh Channel'?",
-        suggestMode: "channel" as InputMode,
+        message: "Phát hiện đây là link YouTube. Bạn có muốn chuyển sang tab YouTube?",
+        suggestPlatform: clean.includes("watch?v=") || clean.includes("shorts/") ? ("youtube_video" as PlatformTab) : ("youtube_channel" as PlatformTab),
       };
     }
 
-    if (mode === "channel" && isVideoLink) {
+    if (activePlatform !== "tiktok" && clean.includes("tiktok.com")) {
       return {
-        message: "Phát hiện đây là link Video. Bạn có muốn chuyển sang chế độ 'Theo Link Video' (tự bóc tách Kênh)?",
-        suggestMode: "video" as InputMode,
+        message: "Phát hiện đây là link TikTok. Bạn có muốn chuyển sang tab TikTok?",
+        suggestPlatform: "tiktok" as PlatformTab,
       };
     }
 
     return null;
-  }, [url, mode]);
+  }, [url, activePlatform]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,11 +76,13 @@ export default function Home() {
     setError(null);
     setData(null);
 
+    const platformApi = platformConfigs[activePlatform].apiKey;
+
     try {
       const res = await fetch("/api/youtube-links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), platform: platformApi }),
       });
 
       const resData = await res.json();
@@ -66,8 +91,7 @@ export default function Home() {
       }
 
       setData(resData);
-      // Auto default to tab with content
-      if (resData.videos?.length === 0 && resData.shorts?.length > 0) {
+      if (resData.platform === "facebook" || (resData.videos?.length === 0 && resData.shorts?.length > 0)) {
         setResultTab("shorts");
       } else {
         setResultTab("videos");
@@ -85,6 +109,25 @@ export default function Home() {
     setTimeout(() => setCopiedType(null), 2000);
   };
 
+  const downloadTxtFile = (links: string[], filename: string) => {
+    if (!links || links.length === 0) return;
+    const cleanContent = links
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .join("\n");
+    const blob = new Blob([cleanContent], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const currentCfg = platformConfigs[activePlatform];
+
   return (
     <main className="relative min-h-screen flex flex-col items-center justify-between p-4 sm:p-8 md:p-12 overflow-hidden bg-[#070a12] text-slate-100">
       {/* Background Glow Circles */}
@@ -95,66 +138,47 @@ export default function Home() {
       <div className="relative z-10 w-full max-w-4xl flex flex-col items-center gap-6 my-auto py-8">
         {/* Header */}
         <div className="text-center space-y-3">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-semibold tracking-wide uppercase">
-            <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-            </svg>
-            YouTube Channel & Video Dual Link Extractor
+          <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-slate-800/80 border border-slate-700/80 text-rose-400 text-xs font-semibold tracking-wide uppercase shadow-lg">
+            <span>✨ Multi-Social Media Video Link Extractor</span>
           </div>
           <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-            Lấy 2 Mảng Video & Shorts
+            Bóc Tách Link Social Media
           </h1>
           <p className="text-sm sm:text-base text-slate-400 max-w-xl mx-auto">
-            Nhập 1 link video bất kỳ (hệ thống tự bóc tách Kênh) hoặc nhập URL Kênh trực tiếp để xuất 2 danh sách video.
+            Hỗ trợ bóc tách danh sách Video & Shorts từ YouTube và TikTok.
           </p>
         </div>
 
-        {/* Input Mode Switcher Tabs */}
-        <div className="w-full max-w-2xl bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center shadow-xl">
-          <button
-            type="button"
-            onClick={() => setMode("video")}
-            className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer ${
-              mode === "video"
-                ? "bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg shadow-red-600/30"
-                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-            }`}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Nhập 1 Link Video
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("channel")}
-            className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer ${
-              mode === "channel"
-                ? "bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg shadow-red-600/30"
-                : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-            }`}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 100-6 3 3 0 000 6z" />
-            </svg>
-            Nhập Kênh Channel
-          </button>
+        {/* 5 Platform Selector Tabs */}
+        <div className="w-full max-w-3xl bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl flex items-center gap-1 overflow-x-auto shadow-2xl scrollbar-none">
+          {(Object.keys(platformConfigs) as PlatformTab[]).map((tabKey) => {
+            const cfg = platformConfigs[tabKey];
+            const isActive = activePlatform === tabKey;
+            return (
+              <button
+                key={tabKey}
+                type="button"
+                onClick={() => setActivePlatform(tabKey)}
+                className={`py-2.5 px-3.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-1 ${
+                  isActive
+                    ? "bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg shadow-red-600/30"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                }`}
+              >
+                <span>{cfg.icon}</span>
+                <span>{cfg.label}</span>
+              </button>
+            );
+          })}
         </div>
 
-        {/* Mode Explanation Banner */}
+        {/* Active Platform Guidance Banner */}
         <div className="w-full max-w-2xl bg-slate-900/60 border border-slate-800/80 rounded-xl p-3.5 text-xs text-slate-300 flex items-start gap-3">
-          <span className="text-base shrink-0 mt-0.5">💡</span>
+          <span className="text-base shrink-0 mt-0.5">{currentCfg.icon}</span>
           <div>
-            {mode === "video" ? (
-              <p>
-                <strong className="text-white">Chế độ Link Video:</strong> Bạn chỉ cần dán 1 link video bất kỳ của kênh (vd: <code className="text-rose-400 font-mono">youtube.com/watch?v=...</code>). Hệ thống sẽ tự tìm Kênh sở hữu video đó và lấy đủ **2 mảng videos & shorts** của kênh!
-              </p>
-            ) : (
-              <p>
-                <strong className="text-white">Chế độ Kênh Channel:</strong> Nhập URL kênh hoặc handle (vd: <code className="text-rose-400 font-mono">@Fireship</code> hoặc <code className="text-rose-400 font-mono">youtube.com/@Fireship</code>). Hệ thống sẽ trả về đồng thời **2 mảng videos & shorts**!
-              </p>
-            )}
+            <p>
+              <strong className="text-white">{currentCfg.label}:</strong> {currentCfg.desc}
+            </p>
           </div>
         </div>
 
@@ -172,11 +196,7 @@ export default function Home() {
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder={
-                  mode === "video"
-                    ? "Dán link video bất kỳ (vd: https://www.youtube.com/watch?v=... hoặc https://youtu.be/...)"
-                    : "Nhập kênh (vd: @Fireship hoặc https://www.youtube.com/@Fireship)"
-                }
+                placeholder={currentCfg.placeholder}
                 className="w-full bg-transparent px-3 py-3 text-slate-100 placeholder-slate-500 focus:outline-none text-sm sm:text-base"
                 required
               />
@@ -195,7 +215,7 @@ export default function Home() {
                   </>
                 ) : (
                   <>
-                    Bóc tách 2 danh sách
+                    Bóc tách link
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
                     </svg>
@@ -206,19 +226,19 @@ export default function Home() {
           </div>
         </form>
 
-        {/* Input Conflict Warning */}
-        {modeWarning && (
+        {/* Platform Conflict Warning */}
+        {platformWarning && (
           <div className="w-full max-w-2xl p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-center justify-between gap-3 shadow-lg">
             <div className="flex items-center gap-2.5">
               <span className="text-base shrink-0">⚠️</span>
-              <p>{modeWarning.message}</p>
+              <p>{platformWarning.message}</p>
             </div>
             <button
               type="button"
-              onClick={() => setMode(modeWarning.suggestMode)}
+              onClick={() => setActivePlatform(platformWarning.suggestPlatform)}
               className="shrink-0 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg text-xs font-medium transition cursor-pointer"
             >
-              Chuyển sang {modeWarning.suggestMode === "channel" ? "Theo Kênh Channel" : "Theo Link Video"}
+              Chuyển sang tab {platformConfigs[platformWarning.suggestPlatform].label}
             </button>
           </div>
         )}
@@ -239,11 +259,11 @@ export default function Home() {
         {/* Output Section */}
         {data && (
           <div className="w-full max-w-3xl bg-slate-900/80 backdrop-blur-xl border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-5">
-            {/* Channel Info Header */}
+            {/* Platform & Channel Header */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-red-600/20 border border-red-500/30 flex items-center justify-center text-red-400 font-bold text-sm">
-                  YT
+                <div className="w-9 h-9 rounded-full bg-red-600/20 border border-red-500/30 flex items-center justify-center text-red-400 font-bold text-xs uppercase">
+                  {data.platform.substring(0, 2)}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -257,28 +277,40 @@ export default function Home() {
                       Mở Kênh ↗
                     </a>
                   </div>
-                  <p className="text-xs text-slate-400">
-                    {data.videos.length} Videos Thường &bull; {data.shorts.length} Shorts
+                  <p className="text-xs text-slate-400 capitalize">
+                    Platform: <strong className="text-slate-200">{data.platform}</strong> &bull; {data.videos.length} Videos/Posts &bull; {data.shorts.length} Shorts/Reels
                   </p>
                 </div>
               </div>
 
-              {/* Copy Combined JSON Button */}
-              <button
-                onClick={() => copyToClipboard(JSON.stringify(data, null, 2), "all-json")}
-                className="px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-semibold rounded-xl transition border border-red-500/30 shadow-lg shadow-red-600/20 flex items-center gap-1.5 cursor-pointer"
-              >
-                {copiedType === "all-json" ? (
-                  <span className="text-emerald-300 font-bold">✓ Copied Both JSON</span>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    Copy Tất Cả JSON (Videos + Shorts)
-                  </>
-                )}
-              </button>
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadTxtFile(Array.from(new Set([...data.videos, ...data.shorts])), `${data.channel.replace(/[^a-zA-Z0-9_-]/g, "_")}_all_links.txt`)}
+                  className="px-3.5 py-2 bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition border border-emerald-500/30 shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Tải File .TXT (Tất Cả)
+                </button>
+
+                <button
+                  onClick={() => copyToClipboard(JSON.stringify(data, null, 2), "all-json")}
+                  className="px-3.5 py-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-semibold rounded-xl transition border border-red-500/30 shadow-lg shadow-red-600/20 flex items-center gap-1.5 cursor-pointer"
+                >
+                  {copiedType === "all-json" ? (
+                    <span className="text-emerald-300 font-bold">✓ Copied Object JSON</span>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Copy JSON
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Output Sub-Tabs */}
@@ -290,7 +322,7 @@ export default function Home() {
                     resultTab === "videos" ? "bg-slate-800 text-white shadow" : "text-slate-400 hover:text-white"
                   }`}
                 >
-                  🎬 Videos ({data.videos.length})
+                  🎬 Videos / Posts ({data.videos.length})
                 </button>
                 <button
                   onClick={() => setResultTab("shorts")}
@@ -298,7 +330,7 @@ export default function Home() {
                     resultTab === "shorts" ? "bg-slate-800 text-white shadow" : "text-slate-400 hover:text-white"
                   }`}
                 >
-                  ⚡ Shorts ({data.shorts.length})
+                  ⚡ Shorts / Reels ({data.shorts.length})
                 </button>
                 <button
                   onClick={() => setResultTab("combined")}
@@ -311,7 +343,7 @@ export default function Home() {
               </div>
 
               {/* Sub-tab actions */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {resultTab === "videos" && (
                   <>
                     <button
@@ -325,6 +357,12 @@ export default function Home() {
                       className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700 transition cursor-pointer"
                     >
                       {copiedType === "videos-raw" ? "✓ Copied" : "Copy Raw Links"}
+                    </button>
+                    <button
+                      onClick={() => downloadTxtFile(data.videos, `${data.channel.replace(/[^a-zA-Z0-9_-]/g, "_")}_videos.txt`)}
+                      className="px-2.5 py-1.5 bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg border border-emerald-500/40 transition cursor-pointer flex items-center gap-1"
+                    >
+                      <span>📥</span> Tải TXT (Videos)
                     </button>
                   </>
                 )}
@@ -342,7 +380,21 @@ export default function Home() {
                     >
                       {copiedType === "shorts-raw" ? "✓ Copied" : "Copy Raw Links"}
                     </button>
+                    <button
+                      onClick={() => downloadTxtFile(data.shorts, `${data.channel.replace(/[^a-zA-Z0-9_-]/g, "_")}_shorts.txt`)}
+                      className="px-2.5 py-1.5 bg-rose-600/80 hover:bg-rose-500 text-white text-xs font-medium rounded-lg border border-rose-500/40 transition cursor-pointer flex items-center gap-1"
+                    >
+                      <span>📥</span> Tải TXT (Shorts)
+                    </button>
                   </>
+                )}
+                {resultTab === "combined" && (
+                  <button
+                    onClick={() => downloadTxtFile(Array.from(new Set([...data.videos, ...data.shorts])), `${data.channel.replace(/[^a-zA-Z0-9_-]/g, "_")}_all_links.txt`)}
+                    className="px-2.5 py-1.5 bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg border border-emerald-500/40 transition cursor-pointer flex items-center gap-1"
+                  >
+                    <span>📥</span> Tải TXT Tất Cả
+                  </button>
                 )}
               </div>
             </div>
@@ -371,18 +423,18 @@ export default function Home() {
         {/* API Endpoint Documentation Box */}
         <div className="w-full max-w-2xl mt-2 p-4 bg-slate-900/40 border border-slate-800/60 rounded-xl text-slate-400 text-xs space-y-2">
           <div className="font-semibold text-slate-300 flex items-center justify-between">
-            <span>⚡ API Endpoint Access</span>
+            <span>⚡ Multi-Platform API Access</span>
             <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">POST /api/youtube-links</span>
           </div>
           <p className="text-slate-400 leading-relaxed">
-            API tự động xử lý cả link Video lẫn link Kênh Channel. Bạn có thể gọi POST Body (<code className="text-rose-300 font-mono">{`{"url": "https://www.youtube.com/watch?v=..."}`}</code>) hoặc GET Query (<code className="text-rose-300 font-mono">/api/youtube-links?url=@handle</code>). Kết quả trả về gồm <code className="text-emerald-400 font-mono">videos</code> và <code className="text-rose-400 font-mono">shorts</code>.
+            API tự động nhận diện nền tảng (YouTube, TikTok). Bạn chỉ cần truyền POST Body (<code className="text-rose-300 font-mono">{`{"url": "...", "platform": "auto"}`}</code>) hoặc GET Query (<code className="text-rose-300 font-mono">/api/youtube-links?url=...</code>). Kết quả bao gồm mảng <code className="text-emerald-400 font-mono">videos</code> và <code className="text-rose-400 font-mono">shorts</code>.
           </p>
         </div>
       </div>
 
       {/* Footer */}
       <footer className="relative z-10 text-xs text-slate-600 text-center py-4">
-        YouTube Dual Extractor &copy; {new Date().getFullYear()}
+        Multi-Social Media Link Extractor &copy; {new Date().getFullYear()}
       </footer>
     </main>
   );
